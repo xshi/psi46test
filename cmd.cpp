@@ -1722,10 +1722,10 @@ CMD_PROC(dac)
 	for (int i=0; i<16; i++)
 		 if (roclist[i])
 		 {
-		   std::cout << "Setting dac " << addr << " for ROC " << i << endl;
+		   // std::cout << "Setting dac " << addr << " for ROC " << i << endl;
 		    tb.roc_I2cAddr(i);
 		    tb.roc_SetDAC(addr, value);
-		   std::cout << "Set dac "<< addr << " for ROC " << i << endl;
+		    // std::cout << "Set dac "<< addr << " for ROC " << i << endl;
 		 }
 
 	DO_FLUSH
@@ -2488,7 +2488,7 @@ CMD_PROC(modalive)
  int npx[16] = {0};
  int modph[16][52][80] = {{{0}}};
 
- for( size_t iroc = 8; iroc < 16; ++iroc ) {
+ for( size_t iroc = 0; iroc < 16; ++iroc ) {
 
  //  if( roclist[iroc] == 0 ) continue;
 
@@ -2725,7 +2725,7 @@ CMD_PROC(modalive)
  TH2I * hROCS[8];
  TFile f("histos.root", "recreate");
  
- for(int a = 8 ; a < 16 ; a++)
+ for(int a = 0 ; a < 16 ; a++)
  {
 	char szRoc[10];
 	sprintf(szRoc,"hROC%d",a);
