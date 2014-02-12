@@ -16,6 +16,7 @@
 #include <math.h>
 #include <time.h>
 #include <fstream>
+#include <utility>
 #include "psi46test.h"
 #include "plot.h"
 #include "analyzer.h"
@@ -23,7 +24,12 @@
 #include "command.h"
 #include "defectlist.h"
 #include "rpc.h"
-
+#include <iostream>
+#include <iomanip>
+#include "TH2I.h"
+#include "TCanvas.h"
+#include "TFile.h"
+#include <sstream>
 
 using namespace std;
 
@@ -38,9 +44,33 @@ using namespace std;
 
 #define FIFOSIZE 8192
 
-//                   cable length:     5   48  prober 450 cm  bump bonder
-extern const int delayAdjust =  3; //  4    0    19    5       16
-extern const int deserAdjust =  4; //  4    4     5    6        5
+//        	cable length:     5   48  prober 450 cm
+extern int delayAdjust =  4; //  4    0    19    5
+extern int deserAdjust =  4; //  4    4     5    6
+
+void HexToBin(uint16_t hex_number, char * bit_number) {
+        int max = 0x8000;
+        for(int i = 0 ; i <16 ; i++){
+            bit_number [i] = (hex_number & max ) ? '1' : '0';
+
+            max >>=1;
+    }
+        bit_number[16] = 0;
+}
+void HexToBin32(uint32_t hex_number, char * bit_number) {
+
+        uint32_t max = 0x80000000;
+
+        for(int i = 0 ; i <32 ; i++){
+            bit_number [i] = (hex_number & max ) ? '1' : '0';
+
+            max >>=1;
+    }
+        bit_number[32] = 0;
+}
+
+int ParseData( std::vector<uint16_t> & data, std::vectorR<int> & iroc, std::vectorR<int> & row, std::vectorR<int> & col, std::vectorR<int> & ph);
+
 
 
 // =======================================================================
@@ -149,7 +179,6 @@ CMD_PROC(welcome)
 	DO_FLUSH
 	return true;
 }
-
 
 CMD_PROC(setled)
 {
@@ -359,18 +388,11 @@ CMD_PROC(mdelay)
 //  test board commands
 // =======================================================================
 
-CMD_PROC(clksrc)
-{
-	int source;
-	PAR_INT(source, 0, 1);
-	tb.SetClockSource(source);
-	DO_FLUSH
-	return true;
-}
 
-CMD_PROC(clkok)
+/*
+CMD_PROC(clock)
 {
-	if (tb.IsClockPresent())
+	if (tb.isClockPresent())
 		printf("clock ok\n");
 	else
 		printf("clock missing\n");
@@ -397,7 +419,7 @@ CMD_PROC(stretch)
 	DO_FLUSH
 	return true;
 }
-
+*/
 
 CMD_PROC(clk)
 {
@@ -818,20 +840,16 @@ CMD_PROC(pgloop)
 CMD_PROC(dopen)
 {
 	int buffersize;
-	int channel;
 	PAR_INT(buffersize, 0, 60000000);
-	if (!PAR_IS_INT(channel, 0, 7)) channel = 0;
-	buffersize = tb.Daq_Open(buffersize, channel);
-	printf("%i words allocated for data buffer %i\n", buffersize, channel);
+	buffersize = tb.Daq_Open(buffersize,1);
+	printf("%i words allocated for data buffer\n", buffersize);
 	if (buffersize == 0) printf("error\n");
 	return true;
 }
 
 CMD_PROC(dclose)
 {
-	int channel;
-	if (!PAR_IS_INT(channel, 0, 7)) channel = 0;
-	tb.Daq_Close(channel);
+	tb.Daq_Close();
 	DO_FLUSH
 	return true;
 }
@@ -839,18 +857,14 @@ CMD_PROC(dclose)
 
 CMD_PROC(dstart)
 {
-	int channel;
-	if (!PAR_IS_INT(channel, 0, 7)) channel = 0;
-	tb.Daq_Start(channel);
+	tb.Daq_Start();
 	DO_FLUSH
 	return true;
 }
 
 CMD_PROC(dstop)
 {
-	int channel;
-	if (!PAR_IS_INT(channel, 0, 7)) channel = 0;
-	tb.Daq_Stop(channel);
+	tb.Daq_Stop();
 	DO_FLUSH
 	return true;
 }
@@ -859,117 +873,55 @@ CMD_PROC(dstop)
 CMD_PROC(dsize)
 {
 	int channel;
-	if (!PAR_IS_INT(channel, 0, 7)) channel = 0;
-	unsigned int size = tb.Daq_GetSize(channel);
+	PAR_INT(channel,0,2);
+	unsigned long size = tb.Daq_GetSize(channel);
+	
 	printf("size = %u\n", size);
 	return true;
 }
 
-
-void DecodeTbmHeader(unsigned int raw)
+CMD_PROC(decode)
 {
-	int evNr = raw >> 8;
-	int stkCnt = raw & 6;
-	printf("  EV(%3i) STF(%c) PKR(%c) STKCNT(%2i)",
-		evNr,
-		(raw&0x0080)?'1':'0',
-		(raw&0x0040)?'1':'0',
-		stkCnt
-		);
-}
+	uint32_t words_remaining = 0;
+	vector<uint16_t> data;
+        int channel;
+        PAR_INT(channel,0,1);
+	unsigned long size = tb.Daq_GetSize(channel);
+	
+        tb.Daq_Read(data,channel, size, words_remaining);
 
-void DecodeTbmTrailer(unsigned int raw)
-{
-	int dataId = (raw >> 6) & 0x3;
-	int data   = raw & 0x3f;
-	printf("  NTP(%c) RST(%c) RSR(%c) SYE(%c) SYT(%c) CTC(%c) CAL(%c) SF(%c) D%i(%2i)",
-		(raw&0x8000)?'1':'0',
-		(raw&0x4000)?'1':'0',
-		(raw&0x2000)?'1':'0',
-		(raw&0x1000)?'1':'0',
-		(raw&0x0800)?'1':'0',
-		(raw&0x0400)?'1':'0',
-		(raw&0x0200)?'1':'0',
-		(raw&0x0100)?'1':'0',
-		dataId,
-		data
-		);
-}
 
-void DecodePixel(unsigned int raw)
-{
-	unsigned int ph = (raw & 0x0f) + ((raw >> 1) & 0xf0);
-	raw >>= 9;
-	int c =    (raw >> 12) & 7;
-	c = c*6 + ((raw >>  9) & 7);
-	int r =    (raw >>  6) & 7;
-	r = r*6 + ((raw >>  3) & 7);
-	r = r*6 + ( raw        & 7);
-	int y = 80 - r/2;
-	int x = 2*c + (r&1);
-	printf("   Pixel [%05o] %2i/%2i: %3u", raw, x, y, ph);
+
 }
 
 
 CMD_PROC(dread)
 {
-	int channel;
-	if (!PAR_IS_INT(channel, 0, 7)) channel = 0;
-
 	uint32_t words_remaining = 0;
 	vector<uint16_t> data;
-//	int TBM_eventnr,TBM_stackinfo,ColAddr,RowAddr,PulseHeight,TBM_trailerBits,TBM_readbackData;
-
-	tb.Daq_Read(data, 4096, words_remaining, channel);
+	int channel;
+	PAR_INT(channel,0,2);
+	tb.Daq_Read(data,channel, 10, words_remaining);
 	int size = data.size();
-	printf("#samples: %i  remaining: %u\n", size, (unsigned int)(words_remaining));
-
-	unsigned int hdr, trl;
-	unsigned int raw;
-	for (int i=0; i<size; i++)
-	{
-		int d = data[i] & 0xf;
-		int q = (data[i]>>4) & 0xf;
-		switch (q)
-		{
-		case  0: printf("  0(%1X)", d); break;
-
-		case  1: printf("\n R1(%1X)", d); raw = d; break;
-		case  2: printf(" R2(%1X)", d);   raw = (raw<<4) + d; break;
-		case  3: printf(" R3(%1X)", d);   raw = (raw<<4) + d; break;
-		case  4: printf(" R4(%1X)", d);   raw = (raw<<4) + d; break;
-		case  5: printf(" R5(%1X)", d);   raw = (raw<<4) + d; break;
-		case  6: printf(" R6(%1X)", d);   raw = (raw<<4) + d;
-			     DecodePixel(raw);
-				 break;
-
-		case  7: printf("\nROC-HEADER(%1X): ", d); break;
-
-		case  8: printf("\n\nTBM H1(%1X) ", d); hdr = d; break;
-		case  9: printf("H2(%1X) ", d);       hdr = (hdr<<4) + d; break;
-		case 10: printf("H3(%1X) ", d);       hdr = (hdr<<4) + d; break;
-		case 11: printf("H4(%1X) ", d);       hdr = (hdr<<4) + d;
-			     DecodeTbmHeader(hdr);
-			     break;
-
-		case 12: printf("\nTBM T1(%1X) ", d); trl = d; break;
-		case 13: printf("T2(%1X) ", d);       trl = (trl<<4) + d; break;
-		case 14: printf("T3(%1X) ", d);       trl = (trl<<4) + d; break;
-		case 15: printf("T4(%1X) ", d);       trl = (trl<<4) + d;
-			     DecodeTbmTrailer(trl);
-			     break;
-		}
-	}
+	printf("#samples: %i  remaining: %i\n", size, int(words_remaining));
 
 	for (int i=0; i<size; i++)
 	{
 		int x = data[i] & 0xffff;
-		Log.printf("%04X", x);
+		char s[40];
+		HexToBin(x,s);
+		printf(" %04X=%s\n", x,s);
+		if (i%10 == 9) printf("\n");
+	}
+	printf("\n");
+
+	for (int i=0; i<size; i++)
+	{
+		int x = data[i] & 0x0fff;
+		Log.printf("%03X", x);
 		if (i%100 == 9) printf("\n");
 	}
 	printf("\n");
-	Log.printf("\n");
-	Log.flush();
 
 	return true;
 }
@@ -978,7 +930,7 @@ CMD_PROC(dreada)
 {
 	uint32_t words_remaining = 0;
 	vector<uint16_t> data;
-	tb.Daq_Read(data, words_remaining);
+	tb.Daq_Read(data, 0,words_remaining);
 	int size = data.size();
 	printf("#samples: %i remaining: %i\n", size, int(words_remaining));
 
@@ -1020,14 +972,30 @@ CMD_PROC(takedata)
 	double mean_n = 0.0;
 	double mean_size = 0.0;
 
+	std::cout << hex << (long) &tb << std::endl;
+
 	clock_t t = clock();
-	unsigned int memsize = tb.Daq_Open(10000000);
+	unsigned int memsize = tb.Daq_Open(1000000,1);
+
+	std::cout << memsize << std::endl; 
+
 	tb.Daq_Start();
 	clock_t t_start = clock();
 	while (!keypressed())
 	{
 		// read data and status from DTB
-		status = tb.Daq_Read(data, 40000, n);
+		status = tb.Daq_Read(data, 1, 40000, n);
+
+                for(int i = 0 ; i < 1000; i++)
+                {
+                   char s[40];
+                   HexToBin(data[i],s);
+                   printf("data[%d]=%s\n",i,s);
+
+                }
+
+
+	//	printf("%x",data.data());
 
 		// make statistics
 		sum += data.size();
@@ -1068,7 +1036,29 @@ CMD_PROC(takedata)
 	return true;
 }
 
+CMD_PROC(trimroc)
+{
+	int start,step,thrLevel,nTrig;
+	PAR_INT(start,0,255);
+	PAR_INT(step,1,20);
+	PAR_INT(thrLevel,0,255);
+	PAR_INT(nTrig,1,5000);	
 
+	int32_t trim[5000];
+	int32_t res[5000];
+
+	//dacReg vcal 0x19, vthrcomp 0x0C 
+	// int32_t ret = tb.ChipThreshold(start, step, thrLevel, nTrig, 0x0C, 0, 1, res);
+	int32_t ret = tb.ChipThreshold(start, step, thrLevel, nTrig, 0x0C, 0, 1, trim , res);
+	printf("Ret=%d\n",ret);
+
+	for(int x = 0 ; x < 4160 ; x++)
+	{
+		printf("%d : %d \n",x,res[x]);
+
+	}
+		
+}
 
 #define DECBUFFERSIZE 2048
 
@@ -1181,14 +1171,18 @@ CMD_PROC(takedata2)
 	double mean_size = 0.0;
 
 	clock_t t = clock();
-	unsigned long memsize = tb.Daq_Open(1000000);
-	tb.Daq_Select_Deser160(deserAdjust);
+	unsigned long memsize = tb.Daq_Open(1000000,0);
+	//tb.Daq_Select_Deser160(deserAdjust);
 	tb.Daq_Start();
 	clock_t t_start = clock();
 	while (!keypressed())
 	{
 		// read data and status from DTB
-		status = tb.Daq_Read(data, 20000, n);
+		status = tb.Daq_Read(data, 0, 20000, n);
+
+		for(int j = 0; j<200 ; j++)
+			printf("%d",data[j]);	
+				
 
 		// make statistics
 		sum += data.size();
@@ -1252,7 +1246,7 @@ CMD_PROC(showclk)
 
 	tb.Daq_Select_ADC(nSamples, 1, 1);
 	tb.uDelay(1000);
-	tb.Daq_Open(1024);
+	tb.Daq_Open(1024,0);
 	for (i=0; i<20; i++)
 	{
 		tb.Sig_SetDelay(SIG_CLK, 26-i);
@@ -1261,7 +1255,9 @@ CMD_PROC(showclk)
 		tb.Pg_Single();
 		tb.uDelay(1000);
 		tb.Daq_Stop();
-		tb.Daq_Read(data[i], 1024);
+		printf("Size: %d\n",tb.Daq_GetSize());
+		
+		tb.Daq_Read(data[i],0, 1024);
 		if (data[i].size() != nSamples)
 		{
 			printf("Data size %i: %i\n", i, int(data[i].size()));
@@ -1276,9 +1272,11 @@ CMD_PROC(showclk)
 	int x = 0;
 	for (k=0; k<nSamples; k++) for (i=0; i<20; i++)
 	{
+		printf("%d=%d",i,data[i][k]);
 		int y = (data[i])[k] & 0x0fff;
 		if (y & 0x0800) y |= 0xfffff000;
 		values[x++] = y;
+		printf(" = %d\n",y);
 	}
 	Scope("CLK", values);
 
@@ -1311,7 +1309,7 @@ CMD_PROC(showctr)
 
 	tb.Daq_Select_ADC(nSamples, 1, 1);
 	tb.uDelay(1000);
-	tb.Daq_Open(1024);
+	tb.Daq_Open(1024,0);
 	for (i=0; i<20; i++)
 	{
 		tb.Sig_SetDelay(SIG_CTR, 26-i);
@@ -1320,7 +1318,7 @@ CMD_PROC(showctr)
 		tb.Pg_Single();
 		tb.uDelay(1000);
 		tb.Daq_Stop();
-		tb.Daq_Read(data[i], 1024);
+		tb.Daq_Read(data[i], 0, 1024);
 		if (data[i].size() != nSamples)
 		{
 			printf("Data size %i: %i\n", i, int(data[i].size()));
@@ -1373,7 +1371,7 @@ CMD_PROC(showsda)
 
 	tb.Daq_Select_ADC(nSamples, 2, 7);
 	tb.uDelay(1000);
-	tb.Daq_Open(1024);
+	tb.Daq_Open(1024,0);
 	for (i=0; i<20; i++)
 	{
 		tb.Sig_SetDelay(SIG_SDA, 26-i);
@@ -1382,7 +1380,7 @@ CMD_PROC(showsda)
 		tb.roc_Pix_Trim(12, 34, 5);
 		tb.uDelay(1000);
 		tb.Daq_Stop();
-		tb.Daq_Read(data[i], 1024);
+		tb.Daq_Read(data[i], 0, 1024);
 		if (data[i].size() != nSamples)
 		{
 			printf("Data size %i: %i\n", i, int(data[i].size()));
@@ -1407,32 +1405,9 @@ CMD_PROC(showsda)
 }
 
 
-CMD_PROC(dselmod)
-{
-	tb.Daq_Select_Deser400();
-	DO_FLUSH
-	return true;
-}
 
-CMD_PROC(dmodres)
-{
-	int reset;
-	if (!PAR_IS_INT(reset, 0, 3)) reset = 3;
-	tb.Daq_Deser400_Reset(reset);
-	DO_FLUSH
-	return true;
-}
 
-CMD_PROC(dselroc)
-{
-	int shift;
-	PAR_INT(shift,0,7);
-	tb.Daq_Select_Deser160(shift);
-	DO_FLUSH
-	return true;
-}
-
-CMD_PROC(dselroca)
+CMD_PROC(adcena)
 {
 	int datasize;
 	PAR_INT(datasize, 1, 2047);
@@ -1441,14 +1416,21 @@ CMD_PROC(dselroca)
 	return true;
 }
 
-CMD_PROC(dseloff)
+CMD_PROC(adcdis)
 {
-	tb.Daq_DeselectAll();
+	tb.Daq_Select_Deser160(2);
 	DO_FLUSH
 	return true;
 }
 
-
+CMD_PROC(deser)
+{
+	int shift;
+	PAR_INT(shift,0,7);
+	tb.Daq_Select_Deser160(shift);
+	DO_FLUSH
+	return true;
+}
 
 
 
@@ -1486,7 +1468,7 @@ CMD_PROC(decoding)
 	tb.Daq_Select_Deser160(2);
 	tb.uDelay(10);
 	Log.section("decoding");
-	tb.Daq_Open(100);
+	tb.Daq_Open(100,0);
 	for (t=0; t<44; t++)
 	{
 		tb.Sig_SetDelay(SIG_CLK, t);
@@ -1498,7 +1480,7 @@ CMD_PROC(decoding)
 			tb.Pg_Single();
 			tb.uDelay(200);
 			tb.Daq_Stop();
-			tb.Daq_Read(data[i], 200);
+			tb.Daq_Read(data[i], 0, 200);
 		}
 		Log.printf("%3i ", int(t));
 		decoding_show(data);
@@ -1538,7 +1520,6 @@ CMD_PROC(vdac)     // regulated VDAC
 // =======================================================================
 //  tbm commands
 // =======================================================================
-
 CMD_PROC(tbmdis)
 {
 	tb.tbm_Enable(false);
@@ -1550,7 +1531,7 @@ CMD_PROC(tbmsel)
 {
 	int hub, port;
 	PAR_INT(hub,0,31);
-	PAR_INT(port,0,3);
+	PAR_INT(port,0,7);
 	tb.tbm_Enable(true);
 	tb.tbm_Addr(hub,port);
 	DO_FLUSH
@@ -1578,7 +1559,6 @@ CMD_PROC(tbmset)
 	return true;
 }
 
-/*
 CMD_PROC(tbmget)
 {
 	int reg;
@@ -1595,7 +1575,7 @@ CMD_PROC(tbmget)
 CMD_PROC(tbmgetraw)
 {
 	int reg;
-	long value;
+	uint32_t value;
 	PAR_INT(reg,0,255);
 	if (tb.tbm_GetRaw(reg,value))
 	{
@@ -1677,9 +1657,11 @@ CMD_PROC(tbmregs)
 	int i;
 	int value[13];
 	unsigned char data;
+	int ret = 0;
 
 	for (i=0; i<13; i++)
-		if (tb.tbm_Get(reg[i],data)) value[i] = data; else value[i] = -1;
+		if (ret = tb.tbm_Get(reg[i],data)) value[i] = data; else value[i] = -1;
+	printf(" return: %d\n",ret);
 	printf(" reg  TBMA   TBMB\n");
 	printf("TBMA %s\n", regline);
 	for (i=0; i<5;  i++) PrintTbmData(reg[i],value[i]);
@@ -1709,7 +1691,6 @@ CMD_PROC(modscan)
 	puts("\n");
 	return true;
 }
-*/
 
 // =======================================================================
 //  roc commands
@@ -1726,7 +1707,9 @@ CMD_PROC(select)
 	for (;    i<=rocmax; i++) roclist[i] = 1;
 	for (;    i<16;      i++) roclist[i] = 0;
 
+	cout << "Init ROC: " << rocmin << endl;
 	tb.roc_I2cAddr(rocmin);
+	cout << "Init successful" << endl;
 	return true;
 }
 
@@ -1736,8 +1719,14 @@ CMD_PROC(dac)
 	PAR_INT(addr,1,255)
 	PAR_INT(value,0,255)
 
-	for (int i=0; i<16; i++) if (roclist[i])
-	{ tb.roc_I2cAddr(i); tb.roc_SetDAC(addr, value); }
+	for (int i=0; i<16; i++)
+		 if (roclist[i])
+		 {
+		   std::cout << "Setting dac " << addr << " for ROC " << i << endl;
+		    tb.roc_I2cAddr(i);
+		    tb.roc_SetDAC(addr, value);
+		   std::cout << "Set dac "<< addr << " for ROC " << i << endl;
+		 }
 
 	DO_FLUSH
 	return true;
@@ -1935,532 +1924,7 @@ CMD_PROC(mask)
 //  experimential ROC test commands
 // =======================================================================
 
-
-class CDemoAnalyzer : public CAnalyzer
-{
-	CRocEvent* Read();
-};
-
-CRocEvent* CDemoAnalyzer::Read()
-{
-	CRocEvent* ev = Get();
-
-	Log.printf("Header: %03X\n", int(ev->header));
-	for (unsigned int i=0; i<ev->pixel.size(); i++)
-		Log.printf("[%3i %3i %3i]\n", ev->pixel[i].x, ev->pixel[i].y, ev->pixel[i].ph);
-	Log.printf("\n");
-	return ev;
-};
-
-
-class CDemoAnalyzer2 : public CAnalyzer
-{
-	CRocEvent* Read();
-};
-
-
-CRocEvent* CDemoAnalyzer2::Read()
-{
-	CRocEvent* ev = Get();
-
-	Log.printf("%03X ", int(ev->header));
-	for (unsigned int i=0; i<ev->pixel.size(); i++)
-		Log.printf(" %3i", ev->pixel[i].ph);
-	Log.printf("\n");
-	return ev;
-};
-
-
-// --- Level Histo
-
-class CLevelHisto : public CAnalyzer
-{
-	unsigned int pos;
-	unsigned int h[256];
-	CRocEvent* Read();
-public:
-	CLevelHisto(unsigned int ro_pos);
-	void Clear();
-	void Report(FILE *f, int min, int max);
-};
-
-
-CLevelHisto::CLevelHisto(unsigned int rp_pos)
-{
-	pos = rp_pos;
-	Clear();
-}
-
-void CLevelHisto::Clear()
-{
-	for (int i=0; i<256; i++) h[i] = 0;
-}
-
-void CLevelHisto::Report(FILE *f, int min, int max)
-{
-	for (int i=min; i<=max; i++) fprintf(f, "%3i, %5u\n", i, h[i]);
-}
-
-
-CRocEvent* CLevelHisto::Read()
-{
-	CRocEvent* ev = Get();
-	if (ev->pixel.size() > pos)
-	{
-		unsigned int x = ev->pixel[pos].ph;
-		if (x < 256) h[x]++;
-	}
-	return ev;
-};
-
-
-// ---
-class CPrint : public CAnalyzer
-{
-	CRocEvent* Read();
-};
-
-
-CRocEvent* CPrint::Read()
-{
-	CRocEvent* ev = Get();
-	for (unsigned int i = 0; i < ev->pixel.size(); i++)
-	{
-		printf(" %3u", ev->pixel[i].ph);
-	}
-	printf("\n");
-	return ev;
-};
-
-
-CMD_PROC(analyze)
-{
-	int vc;
-	PAR_INT(vc,0,255)
-
-	CDtbSource src(tb, false);
-	CDataRecordScanner rec;
-	CRocDecoder dec;
-	CLevelHisto l(0);
-	CSink<CRocEvent*> pump;
-
-	src >> rec >> dec >> l >> pump;
-
-//	tb.roc_SetDAC(WBC,  15);
-	tb.roc_SetDAC(Vcal, vc);
-	tb.roc_SetDAC(CtrlReg,0x04); // high range
-
-	tb.Pg_SetCmd(0, PG_RESR + 25);
-	tb.Pg_SetCmd(1, PG_CAL  + 20);
-	tb.Pg_SetCmd(2, PG_TRG  + 16);
-	tb.Pg_SetCmd(3, PG_TOK);
-	tb.uDelay(100);
-	tb.Flush();
-
-	tb.Daq_Open(1000000);
-	tb.Daq_Select_Deser160(deserAdjust);
-
-	tb.Daq_Start();
-	tb.uDelay(10);
-	for (int i=0; i<3; i++) tb.roc_Pix_Trim(i, 5, 15);
-
-	tb.uDelay(100);
-	tb.Pg_Loop(10000);
-
-	try
-	{
-		int i=0;
-		while (i++ < 10000 && !keypressed()) pump.Get();
-		tb.Pg_Stop();
-	}
-	catch (DS_empty &) { printf("finished\n"); }
-	catch (DataPipeException &e) { printf("%s\n", e.what()); }
-
-	tb.Daq_Stop();
-
-/*	try { pump.GetAll(); }
-	catch (DS_empty &) { printf("finished\n"); }
-	catch (DataPipeException &e) { printf("%s\n", e.what()); }
-*/
-	tb.Daq_Close();
-
-	const int min =  40;
-	const int max = 255;
-	for (int i=min; i<=max; i++) Log.printf(" %5i", i);
-	Log.printf("\n");
-	l.Report(Log.File(), min, max);
-
-	Log.flush();
-	return true;
-}
-
-
-CMD_PROC(adcsingle)
-{
-	CDtbSource src(tb, false);
-	CDataRecordScanner rec;
-	CRocDecoder dec;
-	CPrint print;
-//	CDemoAnalyzer print;
-	CSink<CRocEvent*> pump;
-
-	src >> rec >> dec >> print >> pump;
-
-	tb.Daq_Open(1000);
-	tb.Daq_Select_Deser160(deserAdjust);
-	tb.Daq_Start();
-	tb.uDelay(10);
-
-	tb.Pg_SetCmd(0, PG_RESR + 25);
-	tb.Pg_SetCmd(1, PG_CAL  + 20);
-	tb.Pg_SetCmd(2, PG_SYNC|PG_TRG  + 16);
-	tb.Pg_SetCmd(3, PG_TOK);
-	tb.uDelay(100);
-	tb.Flush();
-
-	tb.Pg_Single();
-	tb.uDelay(100);
-
-	try { pump.GetAll(); }
-	catch (DS_empty &) {}
-	catch (DataPipeException &e) { /* printf("%s\n", e.what()); */ }
-
-	tb.Daq_Stop();
-	tb.Daq_Close();
-	Log.flush();
-	return true;
-}
-
-
-CMD_PROC(adcpeak)
-{
-	CDtbSource src(tb, false);
-	CDataRecordScanner rec;
-	CRocDecoder dec;
-	CLevelHisto l(0);
-	CSink<CRocEvent*> pump;
-
-	src >> rec >> dec >> l >> pump;
-
-//	tb.roc_SetDAC(WBC,  15);
-	tb.roc_SetDAC(CtrlReg,0x04); // high range
-
-	tb.Pg_SetCmd(0, PG_RESR + 25);
-	tb.Pg_SetCmd(1, PG_CAL  + 20);
-	tb.Pg_SetCmd(2, PG_SYNC|PG_TRG  + 16);
-	tb.Pg_SetCmd(3, PG_TOK);
-	tb.uDelay(100);
-	tb.Flush();
-
-	tb.Daq_Open(2000000);
-	tb.Daq_Select_Deser160(deserAdjust);
-
-	tb.Daq_Start();
-	tb.uDelay(10);
-	tb.roc_Pix_Trim(5, 5, 15);
-	tb.roc_Pix_Cal( 5, 5);
-//	tb.roc_SetDAC();
-	tb.uDelay(100);
-
-	tb.Pg_Loop(2000);
-	try
-	{
-		putchar('#');
-		for (int i=0; i<50; i++)
-		{
-			for (int k=0; k<1000; k++) pump.Get();
-			putchar('.');
-			if (keypressed()) break;
-		}
-	}
-	catch (DS_empty &) { printf("finished\n"); }
-	catch (DataPipeException &e) { printf("%s\n", e.what()); }
-
-	tb.Pg_Stop();
-	printf(" \n");
-	tb.Daq_Stop();
-	tb.Daq_Close();
-
-	Log.section("ADCPEAK");
-	l.Report(Log.File(), 0, 255);
-	FILE *f = fopen("adchisto\\adchisto.txt", "wt");
-	if (f)
-	{
-		l.Report(f, 0, 255);
-		fclose(f);
-	} else printf("Error writing adchisto.txt\n");
-
-	Log.flush();
-	return true;
-}
-
-
-CMD_PROC(adchisto)
-{
-	CDtbSource src(tb, false);
-	CDataRecordScanner rec;
-	CRocDecoder dec;
-	CLevelHisto l(0);
-	CSink<CRocEvent*> pump;
-
-	src >> rec >> dec >> l >> pump;
-
-//	tb.roc_SetDAC(WBC,  15);
-	tb.roc_SetDAC(CtrlReg,0x04); // high range
-
-	tb.Pg_SetCmd(0, PG_RESR + 25);
-	tb.Pg_SetCmd(1, PG_CAL  + 20);
-	tb.Pg_SetCmd(2, PG_TRG  + 16);
-	tb.Pg_SetCmd(3, PG_TOK);
-	tb.uDelay(100);
-	tb.Flush();
-
-	tb.Daq_Open(1000000);
-	tb.Daq_Select_Deser160(deserAdjust);
-
-	tb.Daq_Start();
-	tb.uDelay(10);
-	tb.roc_Pix_Trim(5, 5, 15);
-	tb.roc_Pix_Cal( 5, 5);
-
-	tb.uDelay(100);
-
-	tb.roc_SetDAC(Vcal, 0);
-	tb.Pg_Loop(2000);
-	try
-	{
-		for (int t=20; t<120; t++)
-		{
-			tb.roc_SetDAC(Vcal, t);
-			for (int s=100; s<130; s++)
-			{
-				tb.roc_SetDAC(VoffsetRO, s);
-				tb.uDelay(100);
-				for (int i=0; i<500; i++) pump.Get();
-			}
-			putchar('.');
-			if (keypressed()) break;
-		}
-	}
-	catch (DS_empty &) { printf("finished\n"); }
-	catch (DataPipeException &e) { printf("%s\n", e.what()); }
-	printf("\n");
-	tb.Pg_Stop();
-
-	tb.Daq_Stop();
-
-	tb.Daq_Close();
-
-	Log.section("ADCHISTO");
-	l.Report(Log.File(), 0, 255);
-	FILE *f = fopen("adchisto\\adchisto.txt", "wt");
-	if (f)
-	{
-		l.Report(f, 0, 255);
-		fclose(f);
-	} else printf("Error writing adchisto.txt\n");
-
-	Log.flush();
-	return true;
-}
-
-
-
-class CAdcLevelHisto : public CAnalyzer
-{
-	unsigned int n;
-	unsigned int m;
-	CRocEvent* Read();
-public:
-	unsigned int h[256];
-	CAdcLevelHisto() { Clear(); }
-	void Clear();
-	double Mean() { return n ? double(m)/n : 0.0; }
-	void Report(FILE *f, int min, int max);
-};
-
-
-void CAdcLevelHisto::Clear()
-{
-	n = m = 0;
-	for (int i=0; i<256; i++) h[i] = 0;
-}
-
-CRocEvent* CAdcLevelHisto::Read()
-{
-	CRocEvent* ev = Get();
-	if (ev->pixel.size() > 0)
-	{
-		unsigned int x = ev->pixel[0].ph;
-		if (x < 256)
-		{
-			h[x]++;
-			m += x;
-			n++;
-		}
-	}
-	return ev;
-};
-
-void CAdcLevelHisto::Report(FILE *f, int min, int max)
-{
-	if (min < 0) min = 0;
-	if (max >=256) max = 255;
-	fprintf(f, " %5.1f", Mean());
-	for (int i=min; i<=max; i++) fprintf(f, " %3u", h[i]);
-	fprintf(f, "\n");
-}
-
-
-CMD_PROC(adctransfer)
-{
-	int mode;
-	PAR_INT(mode, 0, 1);
-
-	FILE *f = fopen("adchisto\\adctransfer.txt", "wt");
-	if (!f)
-	{
-		printf("Error open adctransfer.txt\n");
-		return true;
-	}
-	CDotPlot plot;
-
-	CDtbSource src(tb, false);
-	CDataRecordScanner rec;
-	CRocDecoder dec;
-	CAdcLevelHisto l;
-	CSink<CRocEvent*> pump;
-	src >> rec >> dec >> l >> pump;
-
-	tb.Pg_SetCmd(0, PG_RESR + 25);
-	tb.Pg_SetCmd(1, PG_CAL  + 20);
-	tb.Pg_SetCmd(2, PG_TRG  + 16);
-	tb.Pg_SetCmd(3, PG_TOK);
-	tb.uDelay(100);
-	tb.Flush();
-
-	tb.Daq_Open(1000000);
-	tb.Daq_Select_Deser160(deserAdjust);
-
-	tb.Daq_Start();
-	tb.uDelay(10);
-//	tb.roc_Pix_Trim(5, 5, 15);
-//	tb.roc_Pix_Cal( 5, 5);
-
-	tb.uDelay(100);
-	const int cntPerStep = 100;
-	try
-	{
-#define DAC_PARAM
-#ifdef DAC_PARAM
-		for (int offs = 0; offs <= 256; offs += 32)
-		{
-			tb.roc_SetDAC(VoffsetRO, (offs==256)? 255 : offs);
-#endif
-			for (int t=40; t<200; t+=1)
-			{
-				l.Clear();
-				tb.roc_SetDAC(Vcal, t);
-				tb.uDelay(100);
-				int s;
-				for (s=0; s<cntPerStep; s++)
-				{
-					tb.Pg_Single();
-					tb.uDelay(100);
-				}
-				for (s=0; s<cntPerStep; s++) pump.Get();
-
-				if (mode == 1) for (s=0; s<256; s++) plot.Add(t, s, l.h[s]);
-				else plot.AddMean(t, l.Mean());
-
-				fprintf(f, "%3i ", t);
-				l.Report(f, 0, 255);
-				putchar('.');
-				if (keypressed()) break;
-			}
-#ifdef DAC_PARAM
-		}
-#endif
-	}
-	catch (DS_empty &) { printf("finished\n"); }
-	catch (DataPipeException &e) { printf("%s\n", e.what()); }
-	printf("\n");
-
-	tb.Pg_Stop();
-
-	tb.Daq_Stop();
-
-	tb.Daq_Close();
-
-	fclose(f);
-	plot.Show();
-
-	return true;
-}
-
-
-void adctest_single()
-{
-/*	int x, y = 10;
-	tb.Daq_Start();
-	for (x=0; x<ROC_NUMCOLS; x++)
-	{
-		tb.roc_Pix_Trim(x, y, 0);
-		tb.Pg_Single();
-		tb.uDelay(100);
-		tb.roc_Pix_Mask(x, y);
-	}
-	tb.Daq_Stop();
-
-	CReadout data;
-	data.Init();
-
-	int p[ROC_NUMCOLS];
-	for (x=0; x<ROC_NUMCOLS; x++)
-	{
-		data.Read();
-		p[x] = (data.pixel.size() != 0)? (data.pixel.front()).ph : -1;
-	}
-
-	Log.section("ADCTEST");
-	for (x=0; x<ROC_NUMCOLS; x++) Log.printf(" %3i", p[x]);
-	Log.printf("\n");
-*/
-}
-
-
-CMD_PROC(adctest)
-{
-	tb.roc_SetDAC(WBC, 100);
-	tb.roc_SetDAC(Vcal, 20);
-	tb.roc_SetDAC(CtrlReg,0x04); // high range
-
-	tb.Pg_SetCmd(0, PG_RESR + 25);
-	tb.Pg_SetCmd(1, PG_CAL  + 100);
-	tb.Pg_SetCmd(2, PG_TRG  + 16);
-	tb.Pg_SetCmd(3, PG_TOK);
-	tb.uDelay(100);
-	tb.Flush();
-
-	tb.Daq_Open(100000);
-	tb.Daq_Select_Deser160(deserAdjust);
-
-	// single pixel readout
-	try
-	{
-		adctest_single();
-	}
-	catch (int e)
-	{
-		printf("ERROR %i\n", e);
-	}
-
-	tb.Daq_Close();
-	return true;
-}
-
-
-CMD_PROC(ethsend)
+/*CMD_PROC(ethsend)
 {
 	char msg[45];
 	PAR_STRINGEOL(msg,45);
@@ -2475,7 +1939,7 @@ CMD_PROC(ethrx)
 	unsigned int n = tb.Ethernet_RecvPackets();
 	printf("%u packets received\n", n);
 	return true;
-}
+}*/
 
 
 void PrintScale(int min, int max)
@@ -2510,7 +1974,7 @@ void Scan1D(int vx, int xmin, int xmax)
 		}
 	}
 	tb.Daq_Stop();
-	tb.Daq_Read(data, 10000);
+	tb.Daq_Read(data, 0, 10000);
 
 	// --- analyze data
 	int pos = 0, count;
@@ -2554,7 +2018,7 @@ CMD_PROC(shmoo)
 	Log.printf("regX(%i)=%i:%i;  regY(%i)=%i:%i\n",
 		vx, xmin, xmax, vy, ymin, ymax);
 
-	tb.Daq_Open(50000);
+	tb.Daq_Open(50000,0);
 	tb.Daq_Select_Deser160(deserAdjust);
 
 	PrintScale(xmin, xmax);
@@ -2594,7 +2058,7 @@ CMD_PROC(phscan)
 
 	tb.roc_SetDAC(WBC,  15);
 
-	tb.Daq_Open(50000);
+	tb.Daq_Open(50000,0);
 	tb.Daq_Select_Deser160(deserAdjust);
 	tb.Daq_Start();
 
@@ -2620,7 +2084,7 @@ CMD_PROC(phscan)
 
 	tb.Daq_Stop();
 	vector<uint16_t> data;
-	tb.Daq_Read(data, 4000);
+	tb.Daq_Read(data, 0, 4000);
 	tb.Daq_Close();
 
 	// --- plot data
@@ -2657,10 +2121,12 @@ CMD_PROC(phscan)
 
 CMD_PROC(deser160)
 {
-	tb.Daq_Open(1000);
+	tb.Daq_Open(1000,0);
 	tb.Pg_SetCmd(0, PG_TOK);
 
 	vector<uint16_t> data;
+
+	vector<std::pair<int,int> > goodvalues;
 
 	int x, y;
 	printf("      0     1     2     3     4     5     6     7\n");
@@ -2680,13 +2146,16 @@ CMD_PROC(deser160)
 			tb.Pg_Single();
 			tb.uDelay(10);
 			tb.Daq_Stop();
-			tb.Daq_Read(data, 100);
+			tb.Daq_Read(data, 0, 100);
 
 			if (data.size())
 			{
 				int h = data[0] & 0xffc;
 				if (h == 0x7f8)
+				{
 					printf(" <%03X>", int(data[0] & 0xffc));
+					goodvalues.push_back(std::make_pair(y,x));
+				}
 				else
 					printf("  %03X ", int(data[0] & 0xffc));
 			}
@@ -2695,6 +2164,21 @@ CMD_PROC(deser160)
 		printf("\n");
 	}
 	tb.Daq_Close();
+	printf("Old values: %i %i\n", delayAdjust, deserAdjust);
+	if (goodvalues.size() == 0)
+	{
+	    printf("No value found where header could be read back - no adjustments made.\n");
+	    return true;
+	}
+	printf("Good values are:\n");
+	for (std::vector<std::pair<int,int> >::const_iterator it = goodvalues.begin(); it != goodvalues.end(); it++)
+	{
+	    printf("%i %i\n", it->first, it->second);
+	}
+	const int select = floor( 0.5*goodvalues.size() - .5);
+	delayAdjust = goodvalues[select].first;
+	deserAdjust = goodvalues[select].second;
+	printf("New values: %i %i\n", delayAdjust, deserAdjust);
 
 	return true;
 }
@@ -2719,7 +2203,7 @@ CMD_PROC(readback)
 {
 	int i;
 
-	tb.Daq_Open(100);
+	tb.Daq_Open(100,0);
 	tb.Pg_Stop();
 	tb.Pg_SetCmd(0, PG_TOK);
 	tb.Daq_Select_Deser160(deserAdjust);
@@ -2735,7 +2219,7 @@ CMD_PROC(readback)
 
 	// read out data
 	vector<uint16_t> data;
-	tb.Daq_Read(data, 40);
+	tb.Daq_Read(data, 0, 40);
 	tb.Daq_Close();
 
 	//analyze data
@@ -2962,6 +2446,535 @@ bool test_chip(char chipid[])
 	return true;
 }
 
+CMD_PROC(modalive)
+{
+
+
+ vector<uint16_t> data;
+/*
+   FILE *fp;
+   char str[20];
+
+   // opening file for reading 
+   fp = fopen("modalivefull.txt" , "r");
+   if(fp == NULL) {
+      perror("Error opening file");
+   }
+
+   while( fgets (str, 20 , fp)!=NULL ) {
+      int n;
+      stringstream(str) >> std::hex >> n;
+      data.push_back(n);
+      char s[20];
+	HexToBin(n,s);
+	cout << s << endl;
+   }
+   fclose(fp);
+
+ cout << "Loaded " << data.size() << endl; 
+ 
+*/
+ //data.push_back( 0xBFE0 ); //=1011111111100000
+ //data.push_back( 0x080B ); //=0000100000001011
+ //data.push_back( 0xFC3F ); //=1111110000111111
+ //data.push_back( 0xC3FC ); //=1100001111111100
+ //data.push_back( 0x3FC3 ); //=0011111111000011
+ //data.push_back( 0xFC3F ); //=1111110000111111
+ //data.push_back( 0xC3FC ); //=1100001111111100
+ //data.push_back( 0x3FC3 ); //=0011111111000011
+ //data.push_back( 0xFFB1 ); //=1111111110110001
+ //data.push_back( 0x007F ); //=0000000001111111
+
+ int npx[16] = {0};
+ int modph[16][52][80] = {{{0}}};
+
+ for( size_t iroc = 8; iroc < 16; ++iroc ) {
+
+ //  if( roclist[iroc] == 0 ) continue;
+
+   tb.roc_I2cAddr(iroc);
+   cout << endl << setw(2) << "ROC " << iroc << endl;
+
+   int tbmch = iroc/8; // 0 or 1
+
+   tb.Daq_Open( 65000, 1 );
+
+   for( int row = 0; row < 80 ; ++row ) {
+
+     for( int col = 0; col < 52; ++col ) {
+
+   	tb.roc_Col_Enable( col, true );
+   	tb.roc_Pix_Trim( col, row, 0 );
+   	tb.roc_Pix_Cal( col, row, false );
+     }
+
+
+     tb.Daq_Start();
+     tb.uDelay(100);
+
+     tb.Pg_Single();
+     tb.uDelay(200);
+
+     tb.Daq_Stop();
+
+     tb.roc_Chip_Mask();
+
+    cout << setw(2) << row << ": DAQ size " << tb.Daq_GetSize( tbmch ) << endl;
+   
+     uint32_t remaining = 0;
+     
+     tb.Daq_Read( data, tbmch , 32000, remaining );
+
+     int size = data.size();
+
+	for(int log = 0;log < size; log++)
+	{
+		
+		Log.printf("%04x\n",data[log]);	  
+
+	}
+
+     uint32_t raw = 0;
+     uint32_t raw2 = 0;
+     uint32_t hdr = 0;
+     uint32_t trl = 0;
+     uint32_t roc = 0;
+     size_t kroc = 0;
+
+	int j = 0;
+
+     for( int i = 0; i < size - 1; i++ ) {
+
+                int x = data[i] & 0xffff;
+
+                char s[40];
+                HexToBin(x,s);
+                printf("D %04X=%s\n", x,s);
+	// Find ROC header
+	if( i == 0) 
+		j = 20;
+	else
+		j = 16;	
+	
+	while( j > 0) {
+			
+		uint32_t search = data[i];
+		search <<= 16;
+		search &= 0xffff0000;
+	
+		search += data[i+1];
+
+		search &= (0xfff << j);
+
+		search >>= j;
+
+        //        int x = data[i] & 0xffff;
+	//	int y = data[i+1] & 0xffff;
+//                HexToBin(x,s);
+//                printf("D %04X=%s", x,s);
+//		HexToBin(y,s);
+ ///               printf("%s\n",s);
+//		HexToBin32(search,s);
+  //              printf("S %08X=%s\n", search,s);
+		
+		switch(search)
+		{
+		  case 0x7ff: //TBM Trailer
+			cout << "Trailer" << endl;
+			trl++;
+			break;
+	
+		  case 0x7fc: //TBM Header
+			cout << "Header" << endl;
+			raw = (data[i] << 16 ) + (data[i+1]);
+			raw <<= (32-j); // Shift off header
+		 	cout << "Evt: "<< ((raw & 0xff000000) >> 24) << endl;	
+			hdr++;
+                        //Reset to next position
+                          j = j - 16;
+                          if(j<0)
+                          {
+                                i++;
+                                j+=16;
+                          }      
+                        if(i > size)
+                                break;
+  
+			break;
+			
+		  case 0x7f8: //ROC Header
+		  case 0x7f9:
+		  case 0x7fa:
+		  case 0x7fb:
+			cout << "Roc : " << j << endl;
+			roc++;
+			while(1) {
+			  raw = (data[i] << 16 ) + (data[i+1]);
+ //                         HexToBin32(raw,s);
+ //                         printf("1 %08X=%s\n", raw,s);
+			  raw <<= (32-j); // Shift off header
+
+ //                         HexToBin32(raw,s);
+  //                        printf("3 %08X=%s\n", raw,s);
+
+		 	  raw2 = (data[i+2] << 16) + data[i+3];
+//                          HexToBin32(raw2,s);
+  //                        printf("2 %08X=%s\n", raw2,s);
+
+			  raw += raw2 >> j;
+
+			  HexToBin32(raw,s);
+                	  printf("RAW %08X=%s\n", raw & 0xFF800000,s);
+
+			  if(
+				((raw & 0xFF800000) == 0x7F800000) || 
+				((raw & 0xFF800000) == 0x7F900000) || 
+				((raw & 0xFF800000) == 0x7FA00000) || 
+				((raw & 0xFF800000) == 0x7FB00000) || 
+				((raw & 0xFF800000) == 0xFF800000))
+			  {	
+				cout << " No Pixel Data " << endl;
+				break;
+			  } 
+			  raw >>= 8;		
+			  cout << "Pixel data=" << raw << endl;
+
+			  //Decode pixel data
+			int ph = 0;
+	        	int c = 0;
+	        	int r = 0;
+        		int x = 0;
+       			int y = 0;
+
+			ph = (raw & 0x0f) + ((raw >> 1) & 0xf0);
+            		raw >>= 9;
+            		c =    (raw >> 12) & 7;
+            		c = c*6 + ((raw >>  9) & 7);
+            		r =    (raw >>  6) & 7;
+            		r = r*6 + ((raw >>  3) & 7);
+            		r = r*6 + ( raw        & 7);
+            		y = 80 - r/2;
+            		x = 2*c + (r&1);
+	                if( y > -1 && y < 80 && x > -1 && x < 52 )
+                        modph[iroc][x][y] = ph;
+	
+			cout << "x: "<< x << "  y: " << y << "  ph: " << ph << endl;
+			  //Reset to next position
+			  i++;
+			  j = j - 8;
+			  if(j<0)
+			  {
+			  	i++;
+				j+=16;
+			  }	  
+			if(i > size)
+				break;			  
+			} 
+			break;
+		}
+		j--;
+	} //search 
+/*
+        int d = data[i] & 0xf; // 4 bits data
+        int q = (data[i]>>4) & 0xf; // 4 flag bits
+        uint32_t ph = 0;
+        int c = 0;
+        int r = 0;
+        int x = 0;
+        int y = 0;
+        switch (q)
+          {
+          case  0: break;
+
+            // pixel data:
+          case  1: raw = d; break;
+          case  2: raw = (raw<<4) + d; break;
+          case  3: raw = (raw<<4) + d; break;
+          case  4: raw = (raw<<4) + d; break;
+          case  5: raw = (raw<<4) + d; break;
+          case  6: raw = (raw<<4) + d;
+            npx[iroc]++;
+            //DecodePixel(raw);
+            ph = (raw & 0x0f) + ((raw >> 1) & 0xf0);
+            raw >>= 9;
+            c =    (raw >> 12) & 7;
+            c = c*6 + ((raw >>  9) & 7);
+            r =    (raw >>  6) & 7;
+            r = r*6 + ((raw >>  3) & 7);
+            r = r*6 + ( raw        & 7);
+            y = 80 - r/2;
+            x = 2*c + (r&1);
+            if( y > -1 && y < 80 && x > -1 && x < 52 )
+              modph[iroc][x][y] = ph;
+            break;
+
+*/	
+  } //data
+
+ cout << "Tbm Hdr: " << hdr << endl;
+ cout << "Tbm Trl: " << trl << endl;
+ cout << "Roc Hdr: " << roc << endl;
+
+
+  } //row
+
+ } //roc
+
+ //Make plots
+
+ TH2I * hROCS[8];
+ TFile f("histos.root", "recreate");
+ 
+ for(int a = 8 ; a < 16 ; a++)
+ {
+	char szRoc[10];
+	sprintf(szRoc,"hROC%d",a);
+	hROCS[a] = new TH2I(szRoc,szRoc,52,0,52,80,0,80);
+
+	cout << "Init Histos" << hROCS[a] << endl;
+	
+   	for(int col = 0 ; col < 52; col++)
+		for(int row = 0; row < 80 ; row++)
+		{
+			hROCS[a]->Fill(col,row,modph[a][col][row]);
+		} 
+	//TCanvas c1;
+	//c1.cd();
+	f.cd();
+	hROCS[a]->SetDrawOption("colz");
+	hROCS[a]->Draw();
+	//hROCS[a]->Write();
+
+ }
+ f.Write();
+ f.Close();
+ 
+
+}
+
+CMD_PROC(errortest)
+{
+
+    std::vector<uint16_t> data;
+    int iterations;
+ 
+    PAR_INT(iterations,1,10000000);
+
+    tb.roc_I2cAddr(9);
+
+   
+    	for(int row = 30 ; row < 40 ; row++)
+    	{
+
+	    for(int col = 20 ; col < 25 ; col++) 
+
+	    {
+
+	       tb.roc_Col_Enable( col, true );
+       	       tb.roc_Pix_Trim( col, row, 0 );
+               tb.roc_Pix_Cal( col, row, false );
+            }
+	}
+
+     uint32_t pixels = 0;
+     uint32_t errors = 0;
+
+     tb.Daq_Open(1000000,1);
+
+     tb.Daq_Start();
+     tb.uDelay(100);
+
+     for(int it = 0 ; it < iterations ; it ++)
+     {
+	tb.Pg_Single();
+     	tb.uDelay(500);
+
+	uint32_t remaining = 0;
+
+        tb.Daq_Read( data, 1 , 32000, remaining );
+
+        int size = data.size();
+
+	cout << "read "<< size << "  remaining " << remaining << endl;
+
+	std::vectorR<int> iroc, row, col, ph;
+
+	uint16_t num = ParseData(data,iroc,row,col,ph);
+
+	cout << "parsed " << num <<endl;
+
+	data.clear();
+
+	// Check data
+	pixels += iroc.size();
+
+	for(int c = 0 ; c < iroc.size() ; c++)
+	{
+	    int y = row[c];
+	    int x = col[c];
+	    
+	    int exp_x = floor(c / 10) + 20;
+
+	    int exp_y = (((exp_x%2)==1)? 39 - (c % 10) :(c % 10) + 30);
+
+
+	    if(x != exp_x || y != exp_y)
+	    {
+		cout << x << "   " << y << endl;
+		cout << "Exp: " << exp_x<< " , " << exp_y << endl;
+		errors++;
+	    }
+		 
+	}
+
+	iroc.clear();
+	row.clear();
+	col.clear();
+	ph.clear();
+
+     }
+
+     tb.Daq_Stop();
+
+     tb.Daq_Close();
+
+     cout << "Pixels " << pixels << endl << "Errors " << errors << endl;
+
+}
+
+int ParseData( std::vector<uint16_t> &data, std::vectorR<int> & iroc, std::vectorR<int> & row, std::vectorR<int> & col, std::vectorR<int> & ph)
+{
+     uint32_t raw = 0;
+     uint32_t raw2 = 0;
+     uint32_t hdr = 0;
+     uint32_t trl = 0;
+     uint32_t roc = 0;
+     size_t kroc = 0;
+
+        int j = 0;
+     uint16_t size = data.size();
+
+     for( int i = 0; i < size - 1; i++ ) {
+
+                int x = data[i] & 0xffff;
+
+                char s[40];
+                HexToBin(x,s);
+                printf("D %04X=%s\n", x,s);
+        // Find ROC header
+        if( i == 0)
+                j = 20;
+        else
+                j = 16;
+
+        while( j > 0) {
+
+                uint32_t search = data[i];
+                search <<= 16;
+                search &= 0xffff0000;
+
+                search += data[i+1];
+
+                search &= (0xfff << j);
+
+                search >>= j;
+
+                switch(search)
+                {
+                  case 0x7ff: //TBM Trailer
+                        cout << "Trailer" << endl;
+                        trl++;
+                        break;
+
+                  case 0x7fc: //TBM Header
+                        cout << "Header" << endl;
+                        raw = (data[i] << 16 ) + (data[i+1]);
+                        raw <<= (32-j); // Shift off header
+                        cout << "Evt: "<< ((raw & 0xff000000) >> 24) << endl;
+                        hdr++;
+                        //Reset to next position
+                          j = j - 16;
+                          if(j<0)
+                          {
+                                i++;
+                                j+=16;
+                          }
+                        if(i > size)
+                                break;
+
+                        break;
+
+                  case 0x7f8: //ROC Header
+                  case 0x7f9:
+                  case 0x7fa:
+                  case 0x7fb:
+                        cout << "Roc : " << j << endl;
+                        roc++;
+                        while(1) {
+                          raw = (data[i] << 16 ) + (data[i+1]);
+                          raw <<= (32-j); // Shift off header
+
+                          raw2 = (data[i+2] << 16) + data[i+3];
+
+                          raw += raw2 >> j;
+
+                          HexToBin32(raw,s);
+                          printf("RAW %08X=%s\n", raw & 0xFF800000,s);
+
+                          if(
+                                ((raw & 0xFF800000) == 0x7F800000) ||
+                                ((raw & 0xFF800000) == 0x7F900000) ||
+                                ((raw & 0xFF800000) == 0x7FA00000) ||
+                                ((raw & 0xFF800000) == 0x7FB00000) ||
+                                ((raw & 0xFF800000) == 0xFF800000))
+                          {
+                                cout << " No Pixel Data " << endl;
+                                break;
+                          }
+                          raw >>= 8;
+                          cout << "Pixel data=" << raw << endl;
+
+                          //Decode pixel data
+                        int pulse = 0;
+                        int c = 0;
+                        int r = 0;
+                        int x = 0;
+                        int y = 0;
+
+                        pulse = (raw & 0x0f) + ((raw >> 1) & 0xf0);
+                        raw >>= 9;
+                        c =    (raw >> 12) & 7;
+                        c = c*6 + ((raw >>  9) & 7);
+                        r =    (raw >>  6) & 7;
+                        r = r*6 + ((raw >>  3) & 7);
+                        r = r*6 + ( raw        & 7);
+                        y = 80 - r/2;
+                        x = 2*c + (r&1);
+                        
+			iroc.push_back(roc);
+			row.push_back(y);
+			col.push_back(x);
+			ph.push_back(pulse);
+		
+                        cout << "x: "<< x << "  y: " << y << "  ph: " << pulse << endl;
+                          //Reset to next position
+                          i++;
+                          j = j - 8;
+                          if(j<0)
+                          {
+                                i++;
+                                j+=16;
+                          }
+                        if(i > size)
+                                break;
+                        }
+                        break;
+                } //switch
+		j--;
+	    } //while
+	} //data
+	return iroc.size();
+}
 
 CMD_PROC(test)
 {
@@ -3220,8 +3233,7 @@ CMD_PROC(go)
 			}
 			else
 			{
-				if (!ChangeChipPos(chipPos+1)) break;
-//				if (!ChangeChipPos(chipPos+2)) break; // exclude chip B (1)
+				if (!ChangeChipPos(chipPos+2)) break;
 			}
 			char *answer = prober.printf("StepFirstDie");
 			int rsp;
@@ -3365,11 +3377,6 @@ void cmd()
 	CMD_REG(lvds,     "lvds                          LVDS inputs");
 	CMD_REG(lcds,     "lcds                          LCDS inputs");
 
-	CMD_REG(clksrc,   "clksrc <source>               Select clock source");
-	CMD_REG(clkok,    "clkok                         Check if ext clock is present");
-	CMD_REG(fsel,     "fsel <freqdiv>                clock frequency select");
-	CMD_REG(stretch,  "stretch <src> <delay> <width> stretch clock");
-
 	CMD_REG(pon,      "pon                           switch ROC power on");
 	CMD_REG(poff,     "poff                          switch ROC power off");
 	CMD_REG(va,       "va <mV>                       set VA in mV");
@@ -3394,24 +3401,22 @@ void cmd()
 	CMD_REG(pgtrig,   "pgtrig                        enable external pattern trigger");
 	CMD_REG(pgloop,   "pgloop <period>               start patterngenerator in loop mode");
 
-	CMD_REG(dopen,    "dopen <buffer size> [<ch>]    Open DAQ and allocate memory");
-	CMD_REG(dclose,   "dclose [<channel>]            Close DAQ");
-	CMD_REG(dstart,   "dstart [<channel>]            Enable DAQ");
-	CMD_REG(dstop,    "dstop [<channel>]             Disable DAQ");
-	CMD_REG(dsize,    "dsize [<channel>]             Show DAQ buffer fill state");
-	CMD_REG(dread,    "dread [<channel>]             Read Daq buffer and show as digital data");
+	CMD_REG(dopen,    "dopen <buffer size>           Open DAQ and allocate memory");
+	CMD_REG(dclose,   "dclose                        Close DAQ");
+	CMD_REG(dstart,   "dstart                        Enable DAQ");
+	CMD_REG(dstop,    "dstop                         Disable DAQ");
+	CMD_REG(dsize,    "dsize <channel>               Show DAQ buffer fill state");
+	CMD_REG(dread,    "dread                         Read Daq buffer and show as digital data");
 	CMD_REG(dreada,   "dreada                        Read Daq buffer and show as analog data");
 	CMD_REG(showclk,  "showclk                       show CLK signal");
 	CMD_REG(showctr,  "showctr                       show CTR signal");
 	CMD_REG(showsda,  "showsda                       show SDA signal");
 	CMD_REG(takedata, "takedata                      Continous DTB readout (to stop press any key)");
 	CMD_REG(takedata2,"takedata2                     Continous DTB readout and decoding");
+	CMD_REG(deser,    "deser <value>                 controls deser160");
 
-	CMD_REG(dselmod,  "dselmod                       select deser400 for DAQ channel 0");
-	CMD_REG(dmodres,  "dmodres                       reset all deser400");
-	CMD_REG(dselroc,  "dselroc <value>               select deser160 for DAQ channel 0");
-	CMD_REG(dselroca, "dselroca <value>              select adc for channel 0");
-	CMD_REG(dseloff,  "dseloff                       deselect all");
+	CMD_REG(adcena,   "adcena                        enable ADC");
+	CMD_REG(adcdis,   "adcdis                        disable ADC");
 
 	// --- ROC commands --------------------------------------------------
 	CMD_REG(select,   "select <addr range>           set i2c address");
@@ -3431,27 +3436,24 @@ void cmd()
 	CMD_REG(cald,     "cald                          clear calibrate");
 	CMD_REG(mask,     "mask                          mask all pixel and cols");
 
-	// --- TBM commands --------------------------------------------------
-	CMD_REG(tbmdis,   "tbmdis                        disable TBM");
-	CMD_REG(tbmsel,   "tbmsel <hub> <port>           set hub and port address");
-	CMD_REG(modsel,   "modsel <hub>                  set hub address for module");
-	CMD_REG(tbmset,   "tbmset <reg> <value>          set TBM register");
-
 	// --- experimental commands --------------------------------------------
-	CMD_REG(adcsingle,"adcsingle                     ADC problem test 3");
-	CMD_REG(adchisto, "adchisto                      ADC problem test 1");
-	CMD_REG(adcpeak,  "adcpeak                       ADC problem test 2");
-	CMD_REG(adctransfer, "adctransfer");
-	CMD_REG(analyze,  "analyze                       test analyzer chain");
-	CMD_REG(readback, "readback                      extended read back");
-
-	CMD_REG(adctest,  "adctest                       check ADC pulse height readout");
-	CMD_REG(ethsend,  "ethsend <string>              send <string> in a Ethernet packet");
-	CMD_REG(ethrx,    "ethrx                         shows number of received packets");
+	//CMD_REG(ethsend,  "ethsend <string>              send <string> in a Ethernet packet");
+	//CMD_REG(ethrx,    "ethrx                         shows number of received packets");
 	CMD_REG(shmoo,    "shmoo vx xrange vy ymin yrange");
 	CMD_REG(phscan,   "phscan                        ROC pulse height scan");
 	CMD_REG(readback, "readback                      read out ROC data");
 	CMD_REG(deser160, "deser160                      allign deser160");
+	CMD_REG(tbmregs, "tbmregs                        print tbm registers");
+	CMD_REG(tbmsel, "tbmsel <port> <hub>             select tbm");
+	CMD_REG(modscan, "modscan                      module scan");
+
+	CMD_REG(tbmgetraw, "tbmgetraw <reg>			get TBM register");
+	CMD_REG(tbmget, "tbmget <reg>			get TBM register");
+	CMD_REG(tbmset, "tbmset <reg> <value>		set TBM register");
+	CMD_REG(modsel, "modsel 					");
+	CMD_REG(trimroc, "trimroc 					");
+	CMD_REG(modalive, "modalive 					");
+	CMD_REG(errortest, "errortest <iterations> 			");
 
 
 	// --- chip test command ---------------------------------------------

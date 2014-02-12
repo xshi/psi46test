@@ -298,7 +298,7 @@ void CInterpreter::help()
 {
 	printf(" help         display this message\n");
 	printf(" exit         exit commander\n");
-	
+
 	CCommand* p = cmdList.GetFirst();
 	while(p)
 	{

@@ -36,6 +36,18 @@ CChip g_chipdata;
 
 int tct_wbc = 0;
 
+void HexToBin(uint16_t hex_number, char * bit_number);
+/*
+ {
+        int max = 32768;
+        for(int i = 0 ; i < 16 ; i++){
+            bit_number [i] = (hex_number & max ) ? '1' : '0';
+	    
+            max >>=1;
+    }
+	bit_number[16] = 0;
+}
+*/
 void WriteSettings()
 {
 	Log.section("SETTINGS");
@@ -192,7 +204,7 @@ int test_tout()
 	tb.Pg_SetCmd(0, PG_RESR + 20);
 	tb.Pg_SetCmd(1, PG_TOK);
 	
-	tb.Daq_Open(1000);
+	tb.Daq_Open(1000,0);
 	tb.Daq_Select_Deser160(deserAdjust);
 	tb.Daq_Start();
 	tb.Pg_Single();
@@ -232,28 +244,44 @@ bool CalDelScan(int col, int row)
 	tb.Pg_SetCmd(1, PG_CAL  + 15 + tct_wbc);
 	tb.Pg_SetCmd(2, PG_TRG  + 16);
 	tb.Pg_SetCmd(3, PG_TOK);
+	tb.Pg_Loop(20000);
 
 	for (int i=0; i<ROC_NUMCOLS; i++) tb.roc_Col_Enable(i, true);
 	tb.roc_Pix_Trim(col, row, 15);
 	tb.roc_Pix_Cal(col, row);
 
 	// --- take data
-	tb.Daq_Open(50000);
+	Log.printf("Mem_size: %d\n",tb.Daq_Open(50000,0));
+
 	tb.Daq_Select_Deser160(deserAdjust);
 	tb.Daq_Start();
-	for (x = 0; x<=max_caldel; x++)
-	{
-		tb.roc_SetDAC(CalDel, x);
+	//for (x = 0; x<=max_caldel; x++)
+	for (x = 0; 1 ; x++)
+	{	
+		Log.printf("Size: %d\n",tb.Daq_GetSize());
+//		Log.printf("x = %d\n",x);
+		tb.roc_SetDAC(CalDel, 68);
 		tb.uDelay(100);
-		for (k=0; k<10; k++)
+//		for (k=0; k<10; k++)
+		while(1)
 		{
-			tb.Pg_Single();
+//			tb.Pg_Single();
 			tb.uDelay(5);
 		}
 	}
 	tb.Daq_Stop();
-	tb.Daq_Read(data, 10000);
+	tb.Daq_Read(data, 0, 10000);
 	tb.Daq_Close();
+	
+	Log.printf("Data Size: %d\n",data.size());
+	
+	for(int i =0; i < data.size() ; i++)
+	{
+		char * out = new char[25];
+		HexToBin(data[i],out);
+		Log.printf("%4x=%s\n",data[i],out);
+	}
+	Log.printf("Caldel finished.\n");
 
 	tb.roc_Pix_Mask(col, row);
 	tb.roc_ClrCal();
@@ -339,8 +367,8 @@ int GetReadback()
 
 	// read out data
 	vector<uint16_t> data;
-	tb.Daq_Read(data, 1000);
-//	DumpData(data, 40);
+	tb.Daq_Read(data,0, 1000);
+
 	//analyze data
 	int pos = 0;
 	PixelReadoutData pix;
@@ -396,7 +424,7 @@ int test_i2c()
 	sslog << "   ";
 	for (i=0; i<16; i++) sslog << std::hex << std::setw(2) << i;
 	sslog << std::endl;
-	tb.Daq_Open(1000);
+	tb.Daq_Open(1000,0);
 	try
 	{
 		for (i=0; i<16; i++)
@@ -442,7 +470,7 @@ void test_readback()
 
 	tb.Pg_SetCmd(0, PG_TOK);
 	tb.Daq_Select_Deser160(deserAdjust);
-	tb.Daq_Open(1000);
+	tb.Daq_Open(1000,0);
 
 	tb.roc_SetDAC(0xff, 8);
 	int vdig_u = GetReadback() & 0xff;
@@ -575,7 +603,7 @@ void test_pixel()
 	tb.uDelay(100);
 	tb.Flush();
 
-	tb.Daq_Open(50000);
+	tb.Daq_Open(50000,0);
 	tb.Daq_Select_Deser160(deserAdjust);
 	tb.Daq_Start();
 
@@ -607,7 +635,7 @@ void test_pixel()
 	tb.Daq_Stop();
 
 	vector<uint16_t> data;
-	tb.Daq_Read(data, 50000);
+	tb.Daq_Read(data, 0, 50000);
 	tb.Daq_Close();
 
 	// --- analyze data --------------------------------------------------------
@@ -666,7 +694,7 @@ void test_pulse_height1()
 	tb.uDelay(100);
 	tb.Flush();
 
-	tb.Daq_Open(50000);
+	tb.Daq_Open(50000,0);
 	tb.Daq_Select_Deser160(deserAdjust);
 	tb.Daq_Start();
 
@@ -695,7 +723,7 @@ void test_pulse_height1()
 
 	// read data
 	vector<uint16_t> data;
-	tb.Daq_Read(data, 50000);
+	tb.Daq_Read(data, 0, 50000);
 	tb.Daq_Close();
 
 	// analyze data
@@ -730,7 +758,7 @@ void test_pulse_height2()
 	tb.uDelay(100);
 	tb.Flush();
 
-	tb.Daq_Open(50000);
+	tb.Daq_Open(50000,0);
 	tb.Daq_Select_Deser160(deserAdjust);
 	tb.Daq_Start();
 
@@ -759,7 +787,7 @@ void test_pulse_height2()
 
 	// read data
 	vector<uint16_t> data;
-	tb.Daq_Read(data, 50000);
+	tb.Daq_Read(data,0, 50000);
 	tb.Daq_Close();
 
 	// analyze data
@@ -805,7 +833,7 @@ void test_pulseheight()
 	tb.Pg_SetCmd(2, PG_TRG  + 16);
 	tb.Pg_SetCmd(3, PG_TOK);
 
-	tb.Daq_Open(50000);
+	tb.Daq_Open(50000,0);
 	tb.Daq_Select_Deser160(deserAdjust);
 	tb.uDelay(100);
 	tb.Daq_Start();
@@ -834,7 +862,7 @@ void test_pulseheight()
 	tb.roc_ClrCal();
 
 	tb.Daq_Stop();
-	tb.Daq_Read(data, 4000);
+	tb.Daq_Read(data, 0, 4000);
 	tb.Daq_Close();
 //	DumpData(data, 200);
 
@@ -885,7 +913,7 @@ bool GetPixel(unsigned int x)
 	}
 	tb.Daq_Stop();
 	vector<uint16_t> data;
-	tb.Daq_Read(data, 10000);
+	tb.Daq_Read(data,0, 10000);
 	int pos = 0;
 	PixelReadoutData pix;
 
@@ -976,7 +1004,7 @@ int test_PUCs(bool forceDefTest = false)
 	tb.uDelay(100);
 	tb.Flush();
 
-	tb.Daq_Open(10000);
+	tb.Daq_Open(10000,0);
 	tb.Daq_Select_Deser160(deserAdjust);
 
 	InitDAC();
@@ -1034,7 +1062,7 @@ int GetPixelC(unsigned int x)
 	}
 	tb.Daq_Stop();
 	vector<uint16_t> data;
-	tb.Daq_Read(data, 10000);
+	tb.Daq_Read(data,0, 10000);
 	int pos = 0;
 
 	for (i=0; i<count; i++)
@@ -1118,7 +1146,7 @@ bool testAllPixelC(int vtrim, unsigned int trimbit=4 /* reference */ )
 	int col, row;
 	for (col=0; col<ROC_NUMCOLS; col++)
 	{
-		if (!tb.TestColPixel(col,trimvalue,res)) return false;
+		if (!tb.testColPixel(col,trimvalue,res)) return false;
 
 		for(row=0; row<ROC_NUMROWS; row++)
 		{
@@ -1139,7 +1167,7 @@ int test_PUCsC(bool forceDefTest = false)
 	tb.uDelay(100);
 	tb.Flush();
 
-	tb.Daq_Open(10000);
+	tb.Daq_Open(10000,0);
 	tb.Daq_Select_Deser160(deserAdjust);
 
 	InitDAC();
@@ -1196,6 +1224,8 @@ int test_roc_dig(bool &repeat)
 	tb.roc_I2cAddr(0);
 	tb.SetRocAddress(0);
 
+	Log.printf("Initialized.\n");
+
 	switch (test_startup(true))
 	{
 		case ERROR_IMAX:
@@ -1207,6 +1237,7 @@ int test_roc_dig(bool &repeat)
 			test_cleanup(bin);
 			return bin;
 	}
+	Log.printf("I ok.\n");
 
 	if (test_tout())
 	{
@@ -1227,13 +1258,17 @@ int test_roc_dig(bool &repeat)
 	tb.SetRocAddress(0);
 
 	test_readback();
-
+	Log.printf("tested readback.\n");
 	test_current();
 
+	Log.printf("tested current.\n");
 	CalDelScan();
 
+	Log.printf("tested caldel.\n");
 	test_pulseheight();
 	test_pulseheight();
+
+	Log.printf("tested pulseheight.\n");
 
 	test_pixel();
 	unsigned int pixcnt = g_chipdata.pixmap.DefectPixelCount();
@@ -1306,123 +1341,4 @@ int test_roc_dig(bool &repeat)
 }
 
 
-// =======================================================================
-//
-//    digital ROC test on bump bonder (DLL)
-//
-// =======================================================================
 
-void test_cleanup_bonder(int bin, int cClass = 0)
-{
-	tb.Init();
-	tb.Flush();
-	g_chipdata.bin = bin;
-
-	g_chipdata.Calculate();
-	if (cClass > 0) g_chipdata.chipClass = cClass;
-
-	Log.section("CLASS", false);
-	Log.printf(" %i\n", g_chipdata.chipClass);
-
-	Log.section("POFF", false);
-	Log.printf(" %i\n", bin);
-}
-
-
-int test_roc_bumpbonder()
-{ PROFILING
-
-	int chipClass = 0;
-	g_chipdata.InitVana = VANA0;
-
-	tb.SetVD(2.5);
-	tb.SetID(0.5);
-	tb.SetVA(1.5);
-	tb.SetIA(0.4);
-
-	SetMHz();
-
-	int bin = 0;
-	tb.roc_I2cAddr(0);
-	tb.SetRocAddress(0);
-
-	switch (test_startup(true))
-	{
-		case ERROR_IMAX:
-			bin = 1; // Ueberstrom
-			test_cleanup_bonder(bin);
-			return bin;
-		case ERROR_IMIN:
-			bin = 2; // kein Strom
-			test_cleanup_bonder(bin);
-			return bin;
-	}
-
-	if (test_tout())
-	{
-		bin = 3; // kein Token Out
-		test_cleanup_bonder(bin);
-		return bin;
-	}
-
- 	switch (test_i2c())
-	{
-	case ERROR_I2C:
-		bin = 4;
-		test_cleanup_bonder(bin);
-		return bin;
-	case ERROR_I2C0: bin = 4;
-	}
-
-	tb.roc_I2cAddr(0);
-	tb.SetRocAddress(0);
-
-	test_readback();
-
-	test_current();
-
-	CalDelScan();
-
-	test_pixel();
-	unsigned int pixcnt = g_chipdata.pixmap.DefectPixelCount();
-
-	Log.section("PIXMAP");
-	g_chipdata.pixmap.Print(Log);
-
-	if (bin == 4)
-	{
-		test_cleanup_bonder(bin);
-		return bin;
-	}
-
-
-	// === chip classification ==============================================
-
-	// --- class 4 ----------------------------------------------------------
-	chipClass = 4;
-
-	if (pixcnt > 40) goto fail; // > 1%
-
-	if (                              70.0 < g_chipdata.IdigOn)   goto fail;
-	if (                              10.0 < g_chipdata.IanaOn)   goto fail;
-	if (g_chipdata.IdigInit < 10.0 || 50.0 < g_chipdata.IdigInit) goto fail;
-	if (g_chipdata.IanaInit <  8.0 || 60.0 < g_chipdata.IanaInit) goto fail;
-
-	// --- class 3 ----------------------------------------------------------
-	chipClass = 3;
-
-	if (pixcnt > 4) goto fail;  // > 0.1%
-
-	// --- class 2 ----------------------------------------------------------
-	chipClass = 2;
-
-	if (pixcnt > 0) goto fail;
-
-	// --- class 1 ----------------------------------------------------------
-	chipClass = 1;
-
-fail:
-	test_cleanup_bonder(bin, chipClass);
-
-	return -chipClass;
-}

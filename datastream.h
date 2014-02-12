@@ -14,99 +14,53 @@
 using namespace std;
 
 
-// === Error Messages =======================================================
-
-class DS_buffer_overflow : public DataPipeException
-{
-public:
-	DS_buffer_overflow() : DataPipeException("Buffer overflow") {};
-};
-
-class DS_empty : public DataPipeException
-{
-public:
-	DS_empty() : DataPipeException("Buffer empty") {};
-};
-
-
 // === Binary Data Record Format ============================================
 
-class CDataRecord
+struct CDataRecord
 {
-	/*
-		bit 0 = misaligned start
-		bit 1 = no end detected
-		bit 2 = overflow
-	*/
+	unsigned int eventNr;
 	vector<uint16_t> data;
-	unsigned int flags;
-public:
-	void SetStartError() { flags |= 1; }
-	void SetEndError()   { flags |= 2; }
-	void SetOverflow()   { flags |= 4; }
-	void ResetStartError() { flags &= ~1; }
-	void ResetEndError()   { flags &= ~2; }
-	void ResetOverflow()   { flags &= ~4; }
-	void Clear() { flags = 0; data.clear(); }
-	bool IsStartError() { return (flags & 1) != 0; }
-	bool IsEndError()   { return (flags & 2) != 0; }
-	bool IsOverflow()   { return (flags & 4) != 0; }
-	
-	unsigned int GetSize() { return data.size(); }
-	void Add(uint16_t value) { data.push_back(value); }
-	uint16_t operator[](int index) { return data[index]; }
+	void Print(CProtocol &f);
 };
 
 
-struct CRocPixel
+struct CPixel
 {
 	int raw;
 	int x;
 	int y;
-	int ph;
+	int pulseheight;
 	void DecodeRaw();
 };
 
 
 struct CRocEvent
 {
+	unsigned long eventNr;
 	unsigned short header;
-	vector<CRocPixel> pixel;
+	list<CPixel> pixel;
 };
 
 
 // === Data Sources =========================================================
 
-// --- PixelDTB
+// --- pixelDTB
 
-#define DTB_SOURCE_BLOCK_SIZE 4096
+#define DTB_SOURCE_BLOCK_SIZE 16384
 
-class CDtbSource : public CSource<uint16_t>
+class CBinaryDTBSource : public CSource<uint16_t>
 {
-	volatile bool stopAtEmptyData;
-
-	// --- DTB control/state
-	CTestboard &tb;
-	uint32_t dtbRemainingSize;
-	uint8_t  dtbState;
-
-	// --- data buffer
+	CTestboard *tb;
 	uint16_t lastSample;
+
 	unsigned int pos;
 	vector<uint16_t> buffer;
 	uint16_t FillBuffer();
 
-	// --- virtual data access methods
 	uint16_t Read() { return (pos < buffer.size()) ? lastSample = buffer[pos++] : FillBuffer(); }
 	uint16_t ReadLast() { return lastSample; }
 public:
-	CDtbSource(CTestboard &src, bool endlesStream)
-		: stopAtEmptyData(endlesStream), tb(src), lastSample(0x4000), pos(0) {}
-
-	// --- control and status
-	uint8_t  GetState() { return dtbState; }
-	uint32_t GetRemainingSize() { return dtbRemainingSize; }
-	void Stop() { stopAtEmptyData = true; }
+	CBinaryDTBSource(CTestboard &src) : tb(&src), lastSample(0), pos(0) { buffer.reserve(DTB_SOURCE_BLOCK_SIZE); }
 };
 
 
@@ -134,15 +88,16 @@ public:
 };
 
 
-// === CDataRecordScanner (CDataPipe<uint16_t>, CDataRecord*>) ==============
+// === CDataRecordScanner (CDataPipe<uint16_t, CRecord*>) ===================
 
 class CDataRecordScanner : public CDataPipe<uint16_t, CDataRecord*>
 {
+	unsigned long currentEventNr;
 	CDataRecord record;
 	CDataRecord* Read();
 	CDataRecord* ReadLast() { return &record; }
 public:
-	CDataRecordScanner() {}
+	CDataRecordScanner() : currentEventNr(0) {}
 };
 
 

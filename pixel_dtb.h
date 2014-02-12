@@ -147,35 +147,6 @@ public:
 	RPC_EXPORT void uDelay(uint16_t us);
 	void mDelay(uint16_t ms);
 
-	// --- select ROC/Module clock source
-	#define CLK_SRC_INT  0
-	#define CLK_SRC_EXT  1
-	RPC_EXPORT void SetClockSource(uint8_t source);
-
-	// --- check if external clock is present
-	RPC_EXPORT bool IsClockPresent();
-
-	// --- set clock clock frequency (clock divider)
-	#define MHZ_1_25   5
-	#define MHZ_2_5    4
-	#define MHZ_5      3
-	#define MHZ_10     2
-	#define MHZ_20     1
-	#define MHZ_40     0  // default
-	RPC_EXPORT void SetClock(uint8_t MHz);
-
-	// --- set clock stretch
-	// width = 0 -> disable stretch
-	#define STRETCH_AFTER_TRG  0
-	#define STRETCH_AFTER_CAL  1
-	#define STRETCH_AFTER_RES  2
-	#define STRETCH_AFTER_SYNC 3
-	RPC_EXPORT void SetClockStretch(uint8_t src,
-		uint16_t delay, uint16_t width);
-
-//	RPC_EXPORT void PllReset();
-	void SetClock_(unsigned char MHz);
-
 
 	// --- Signal Delay -----------------------------------------------------
 	#define SIG_CLK 0
@@ -197,29 +168,19 @@ public:
 
 
 	// --- digital signal probe ---------------------------------------------
-	#define PROBE_OFF          0
-	#define PROBE_CLK          1
-	#define PROBE_SDA          2
-	#define PROBE_SDA_SEND     3
-	#define PROBE_PG_TOK       4
-	#define PROBE_PG_TRG       5
-	#define PROBE_PG_CAL       6
-	#define PROBE_PG_RES_ROC   7
-	#define PROBE_PG_RES_TBM   8
-	#define PROBE_PG_SYNC      9
-	#define PROBE_CTR         10
-	#define PROBE_TIN         11
-	#define PROBE_TOUT        12
-	#define PROBE_CLK_PRESEN  13
-	#define PROBE_CLK_GOOD    14
-	#define PROBE_DAQ0_WR     15
-	#define PROBE_CRC         16
-	#define PROBE_ADC_RUNNING 19
-	#define PROBE_ADC_RUN     20
-	#define PROBE_ADC_PGATE   21
-	#define PROBE_ADC_START   22
-	#define PROBE_ADC_SGATE   23
-	#define PROBE_ADC_S       24
+	#define PROBE_OFF     0
+	#define PROBE_CLK     1
+	#define PROBE_SDA     2
+	#define PROBE_PGTOK   3
+	#define PROBE_PGTRG   4
+	#define PROBE_PGCAL   5
+	#define PROBE_PGRESR  6
+	#define PROBE_PGREST  7
+	#define PROBE_PGSYNC  8
+	#define PROBE_CTR     9
+	#define PROBE_CLKP   10
+	#define PROBE_CLKG   11
+	#define PROBE_CRC    12
 
 	RPC_EXPORT void SignalProbeD1(uint8_t signal);
 	RPC_EXPORT void SignalProbeD2(uint8_t signal);
@@ -273,7 +234,6 @@ public:
 	RPC_EXPORT void HVoff();
 	RPC_EXPORT void ResetOn();
 	RPC_EXPORT void ResetOff();
-
 	RPC_EXPORT uint8_t GetStatus();
 	RPC_EXPORT void SetRocAddress(uint8_t addr);
 
@@ -293,35 +253,35 @@ public:
 	RPC_EXPORT void Pg_Trigger();
 	RPC_EXPORT void Pg_Loop(uint16_t period);
 
-	RPC_EXPORT uint16_t GetUser1Version();
+//	RPC_EXPORT uint16_t GetUser1Version();
 
 
 	// --- data aquisition --------------------------------------------------
-	RPC_EXPORT uint32_t Daq_Open(uint32_t buffersize = 10000000, uint8_t channel = 0);
-	RPC_EXPORT void Daq_Close(uint8_t channel = 0);
-	RPC_EXPORT void Daq_Start(uint8_t channel = 0);
-	RPC_EXPORT void Daq_Stop(uint8_t channel = 0);
+	RPC_EXPORT uint32_t Daq_Open(uint32_t buffersize, uint8_t dma ); // max # of samples
+	RPC_EXPORT void Daq_Close();
+	RPC_EXPORT void Daq_Start();
+	RPC_EXPORT void Daq_Stop();
 	RPC_EXPORT uint32_t Daq_GetSize(uint8_t channel = 0);
 
 	RPC_EXPORT uint8_t Daq_Read(vectorR<uint16_t> &data,
-			 uint16_t blocksize = 16384, uint8_t channel = 0);
+			 uint8_t channel, uint16_t blocksize = 16384);
 
 	RPC_EXPORT uint8_t Daq_Read(vectorR<uint16_t> &data,
-			uint16_t blocksize, uint32_t &availsize, uint8_t channel = 0);
+			uint8_t channel, uint16_t blocksize, uint32_t &availsize);
 
+	RPC_EXPORT uint8_t Daq_Read(vectorR<uint16_t> &data,
+			uint16_t blocksize, uint32_t &availsize);
+	
+	RPC_EXPORT uint8_t Daq_Read(vectorR<uint16_t> &data,
+			 uint16_t blocksize = 16384);
 
 	RPC_EXPORT void Daq_Select_ADC(uint16_t blocksize, uint8_t source,
 			uint8_t start, uint8_t stop = 0);
 
 	RPC_EXPORT void Daq_Select_Deser160(uint8_t shift);
 
-	RPC_EXPORT void Daq_Select_Deser400();
-	RPC_EXPORT void Daq_Deser400_Reset(uint8_t reset = 3);
 
-	RPC_EXPORT void Daq_DeselectAll();
-
-
-	// --- ROC Communication ------------------------------------------------
+	// --- ROC/module Communication -----------------------------------------
 	// -- set the i2c address for the following commands
 	RPC_EXPORT void roc_I2cAddr(uint8_t id);
 
@@ -353,24 +313,62 @@ public:
 	// -- mask all pixels and columns of the chip
 	RPC_EXPORT void roc_Chip_Mask();
 
+	// --- TBM --------------------------------------------------------------
 
-	// --- TBM/module Communication -----------------------------------------
+	// -- Enables the use of a TBM
 	RPC_EXPORT void tbm_Enable(bool on);
 
+	// -- Selects hub and port to be used, disables module abstraction layer
 	RPC_EXPORT void tbm_Addr(uint8_t hub, uint8_t port);
 
+	// -- Selects hub. Port is selected according to barrel module layout convention
 	RPC_EXPORT void mod_Addr(uint8_t hub);
 
+	// -- Sends I2C commands to the selected address
 	RPC_EXPORT void tbm_Set(uint8_t reg, uint8_t value);
 
-//	RPC_EXPORT bool tbm_Get(uint8_t reg, uint8_t &value);
+	// -- Reads back the register via I2C
+	RPC_EXPORT bool tbm_Get(uint8_t reg, uint8_t &value);
 
-//	RPC_EXPORT bool tbm_GetRaw(uint8_t reg, uint32_t &value);
+	// -- Reads back uninterpreted data, gives raw bit pattern. For debugging purposes if tbm_Get failes with error
+	RPC_EXPORT bool tbm_GetRaw(uint8_t reg, uint32_t &value);
+
+	// -- Other TBM functions
+
+	RPC_EXPORT void tbm1_Write(uint32_t hubAddr, uint32_t addr, int32_t value);
+
+	RPC_EXPORT void tbm2_Write(uint32_t hubAddr, uint32_t addr, int32_t value);
+
+	RPC_EXPORT void tbm_Write(uint32_t hubAddr, uint32_t addr, int32_t value);
+
+        int16_t DecodePixel(vector<uint16_t> &data, int16_t &pos, int16_t &n, int16_t &ph, int16_t &col, int16_t &row);
+
+        RPC_EXPORT bool GetPixelAddressInverted();
+
+        RPC_EXPORT void SetPixelAddressInverted(bool status);
+
+        RPC_EXPORT int32_t CountReadouts(int32_t nTriggers);
+        RPC_EXPORT int32_t CountReadouts(int32_t nTriggers, int32_t chipId);
+        RPC_EXPORT int32_t CountReadouts(int32_t nTriggers, int32_t dacReg, int32_t dacValue);
+        //RPC_EXPORT uint8_t DacDac_dtb(vectorR<uint16_t> &res, int32_t dac1, int32_t dacRange1, int32_t dac2, int32_t dacRange2, int32_t nTrig);
+        RPC_EXPORT int32_t PH(int32_t col, int32_t row, int32_t trim, int16_t nTriggers);
+        //int32_t ThresholdBinary(int32_t thrLevel, int32_t nTrig, int32_t dacReg, int32_t dacMin, int32_t dacMax, bool reverseMode);
+        int32_t Threshold(int32_t start, int32_t step, int32_t thrLevel, int32_t nTrig, int32_t dacReg);
+        //bool FindReadout(int32_t thrLevel, int32_t nTrig, int32_t dacReg, int32_t &dacMin, int32_t &dacMax, bool reverseMode);
+       // RPC_EXPORT int32_t PixelThreshold(int32_t col, int32_t row, int32_t start, int32_t step, int32_t thrLevel, int32_t nTrig, int32_t dacReg, int32_t xtalk, int32_t cals, int32_t trim);
+        RPC_EXPORT bool test_pixel_address(int32_t col, int32_t row);
+        //RPC_EXPORT int32_t ChipEfficiency(int16_t nTriggers, vectorR<uint8_t> &res);
+
 
 // --- Wafer test functions
-	RPC_EXPORT bool TestColPixel(uint8_t col, uint8_t trimbit, vectorR<uint8_t> &res);
+	RPC_EXPORT bool testColPixel(uint8_t col, uint8_t trimbit, vectorR<uint8_t> &res);
 
 	// Ethernet test functions
 	RPC_EXPORT void Ethernet_Send(string &message);
 	RPC_EXPORT uint32_t Ethernet_RecvPackets();
+	RPC_EXPORT int32_t PixelThreshold(int32_t col, int32_t row, int32_t start, int32_t step, int32_t thrLevel, int32_t nTrig, int32_t dacReg, int32_t xtalk, int32_t cals, int32_t trim);
+//	int32_t ChipThreshold(int32_t start, int32_t step, int32_t thrLevel, int32_t nTrig, int32_t dacReg, int32_t xtalk, int32_t cals, int32_t trim, int32_t res);
+	int32_t ChipThreshold(int32_t start, int32_t step, int32_t thrLevel, int32_t nTrig, int32_t dacReg, int32_t xtalk, int32_t cals, int32_t trim[], int32_t res[]);
+	RPC_EXPORT int32_t ChipThresholdConvert(int32_t start, int32_t step, int32_t thrLevel, int32_t nTrig, int32_t dacReg, int32_t xtalk, int32_t cals, vectorR<int32_t> &trim, vectorR<int32_t> &res);
+
 };
